@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=https://v3.wails.io/schemas/wails.v3.json
+version: 3
+project:
+  name: skrifttype
+  product_name: Skrifttype
+  identifier: com.amnuts.skrifttype
+  company: Andrew Collington
+  description: A local-first font library that activates fonts on demand
+  copyright: (c) 2026, Andrew Collington
+  comments: Skrifttype - local-first font library and on-demand activator
+  version: 0.0.0 # overwritten at release time
+  icon: build/appicon.png
+frontend:
+  directory: frontend
+  output: dist
+binaries:
+  # Elevated system-install helper (requireAdministrator). Its Windows
+  # resources live in cmd/font-helper/rsrc_windows_{amd64,arm64}.syso, generated from
+  # build/windows/font-helper.* with `wails3 generate syso`.
+  font-helper:
+    package: cmd/font-helper
+    kind: cli
+    ldflags: ["-H", "windowsgui"]
+    environment:
+      CGO_ENABLED: "0"
+windows:
+  icon: build/windows/icon.ico
+  manifest: build/windows/wails.exe.manifest
+packages:
+  nsis:
+    template: build/windows/nsis/project.nsi
+profiles:
+  # One profile per CI host; Wake runs the whole profile as a single request.
+  windows:
+    targets:
+      windows/amd64:
+        formats: [nsis]
+      windows/arm64:
+        formats: [nsis]
+  macos:
+    targets:
+      darwin/universal: {}
+  linux:
+    targets:
+      linux/amd64:
+        formats: [appimage, deb, rpm]

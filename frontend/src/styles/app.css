@@ -1,0 +1,9 @@
+/* Must be `grid` (not block): a document-level rule on the host wins over the
+   shadow `:host` rule, so block here would clobber the app-shell grid layout. */
+skrift-app { display: grid; height: 100%; }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+
+/* Wails reads this from the element under the cursor: hide the webview's
+   default menu, but keep it for editable fields and selected text. */
+:root { --default-contextmenu: hide; }
+input, textarea, [contenteditable] { --default-contextmenu: auto; }

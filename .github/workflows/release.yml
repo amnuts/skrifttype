@@ -1,0 +1,174 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  WAILS_EXP_USE_WAKE: '1'
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+          - os: windows-latest
+            platform: windows
+          - os: macos-latest
+            platform: macos
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Compute version from tag
+        id: version
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version: $VERSION"
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Linux packaging dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev \
+            rpm \
+            file \
+            fuse \
+            libfuse2
+
+      - name: Install Wails CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.1.0
+
+      - name: Inject version into build metadata
+        shell: bash
+        run: bash scripts/set-version.sh "${{ steps.version.outputs.version }}"
+
+      # ─── Windows ────────────────────────────────────────────────────────
+      # Both arches build CGO-free: the SQLite driver is pure-Go
+      # (modernc.org/sqlite) and WebView2 needs no C compiler. The on-demand
+      # activation layer uses x/sys/windows syscalls, also CGO-free.
+      - name: Install NSIS (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          choco install nsis -y --no-progress
+          # Choco edits the machine PATH, but the current runner shell already
+          # captured its env. Export the install dir to GITHUB_PATH so that
+          # subsequent steps (bash, in particular) see makensis.
+          "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Package Windows (amd64 + arm64)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: wails3 build windows
+
+      - name: Rename Windows artifacts
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          cd bin
+          V="${{ steps.version.outputs.version }}"
+          mv windows-amd64/skrifttype-installer.exe "skrifttype-${V}-windows-amd64-installer.exe"
+          mv windows-arm64/skrifttype-installer.exe "skrifttype-${V}-windows-arm64-installer.exe"
+          ls -la
+
+      # ─── macOS ──────────────────────────────────────────────────────────
+      - name: Package macOS (universal)
+        if: matrix.os == 'macos-latest'
+        run: wails3 build macos
+
+      - name: Zip macOS .app
+        if: matrix.os == 'macos-latest'
+        run: |
+          cd bin
+          V="${{ steps.version.outputs.version }}"
+          zip -r "skrifttype-${V}-macos-universal.zip" skrifttype.app
+          ls -la
+
+      # ─── Linux ──────────────────────────────────────────────────────────
+      - name: Package Linux
+        if: matrix.os == 'ubuntu-latest'
+        run: wails3 build linux
+
+      - name: Rename Linux artifacts
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          cd bin
+          V="${{ steps.version.outputs.version }}"
+          # AppImage: linuxdeploy names it with an arch suffix; normalise.
+          for f in *.AppImage; do
+            [ -f "$f" ] || continue
+            mv "$f" "skrifttype-${V}-linux-amd64.AppImage"
+          done
+          for f in *.deb; do
+            [ -f "$f" ] || continue
+            mv "$f" "skrifttype-${V}-linux-amd64.deb"
+          done
+          for f in *.rpm; do
+            [ -f "$f" ] || continue
+            mv "$f" "skrifttype-${V}-linux-amd64.rpm"
+          done
+          ls -la
+
+      # ─── Upload ─────────────────────────────────────────────────────────
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: skrifttype-${{ matrix.platform }}
+          path: |
+            bin/skrifttype-*-installer.exe
+            bin/skrifttype-*-macos-universal.zip
+            bin/skrifttype-*-linux-amd64.AppImage
+            bin/skrifttype-*-linux-amd64.deb
+            bin/skrifttype-*-linux-amd64.rpm
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Create GitHub Release
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: artifacts/*

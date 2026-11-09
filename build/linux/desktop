@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=Skrifttype
+Comment=A local-first font library that activates fonts on demand
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/skrifttype %u
+Terminal=false
+Type=Application
+Icon=skrifttype
+Categories=Utility;
+StartupWMClass=skrifttype
+
+ 
