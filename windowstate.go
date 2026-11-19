@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -51,6 +52,49 @@ func loadWindowState() (windowState, bool) {
 		return windowState{}, false
 	}
 	return ws, true
+}
+
+// visibleOn reports whether enough of the saved window's title bar would land
+// inside one of the given work areas for the user to grab it. Saved positions
+// can go stale (monitor unplugged or rearranged, resolution changed), and
+// restoring one blindly can put the window entirely off-screen.
+func visibleOn(ws windowState, workAreas []application.Rect) bool {
+	const (
+		titleBar   = 32  // height of the strip that must be reachable
+		minVisible = 100 // horizontal pixels of it that must be on one screen
+		minHeight  = 16  // vertical pixels of it that must be on one screen
+	)
+	for _, wa := range workAreas {
+		w := min(ws.X+ws.Width, wa.X+wa.Width) - max(ws.X, wa.X)
+		h := min(ws.Y+titleBar, wa.Y+wa.Height) - max(ws.Y, wa.Y)
+		if w >= minVisible && h >= minHeight {
+			return true
+		}
+	}
+	return false
+}
+
+// windowPlacement re-centres the main window when its restored position is
+// not visible on any connected monitor. It is a service only because
+// ServiceStartup is the one hook that runs after Wails has enumerated the
+// screens but before it creates the window.
+type windowPlacement struct {
+	app *application.App
+	win *application.WebviewWindow
+	ws  windowState
+	log *slog.Logger
+}
+
+func (p *windowPlacement) ServiceStartup(context.Context, application.ServiceOptions) error {
+	var areas []application.Rect
+	for _, s := range p.app.Screen.GetAll() {
+		areas = append(areas, s.WorkArea)
+	}
+	if len(areas) > 0 && !visibleOn(p.ws, areas) {
+		p.log.Info("saved window position is off-screen; centring", "x", p.ws.X, "y", p.ws.Y)
+		p.win.Center() // before creation this just switches InitialPosition
+	}
+	return nil
 }
 
 // windowStateSaver debounces disk writes so a drag (which fires many move/resize
