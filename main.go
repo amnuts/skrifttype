@@ -26,6 +26,13 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// appIcon is the window/taskbar icon fallback. Wails builds link the icon in
+// as a Windows resource, but a plain `go build` (e.g. an IDE run config) does
+// not, and without this the window gets the generic Windows icon.
+//
+//go:embed build/windows/icon.ico
+var appIcon []byte
+
 // main is the application's entry point. It opens the SQLite store, restores
 // previously-active fonts, wires the backend services, creates the main
 // window (restoring its saved geometry), and runs the application. On quit it
@@ -85,6 +92,7 @@ func main() {
 	app = application.New(application.Options{
 		Name:        "skrifttype",
 		Description: "A local-first font library that activates fonts on demand",
+		Icon:        appIcon,
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 			// Serves /fontfile/<id> so previews can render fonts that are
@@ -144,14 +152,20 @@ func main() {
 		BackgroundColour: application.NewRGB(27, 38, 54),
 		URL:              "/",
 	}
-	if ws, ok := loadWindowState(); ok {
-		opts.Width, opts.Height = ws.Width, ws.Height
+	ws, restored := loadWindowState()
+	if restored {
+		// Wails does not apply MinWidth/MinHeight to the initial size, and
+		// older builds saved the 160x28 minimised size.
+		opts.Width, opts.Height = max(ws.Width, opts.MinWidth), max(ws.Height, opts.MinHeight)
 		if ws.HasPos {
 			opts.X, opts.Y = ws.X, ws.Y
 			opts.InitialPosition = application.WindowXY
 		}
 	}
 	win := app.Window.NewWithOptions(opts)
+	if restored && ws.HasPos {
+		app.RegisterService(application.NewService(&windowPlacement{app: app, win: win, ws: ws, log: logger}))
+	}
 
 	// Live folder watching: a burst of font files appearing, changing or
 	// vanishing in a watched folder triggers one rescan.
@@ -185,8 +199,14 @@ func main() {
 	})
 
 	// Persist window geometry (debounced) whenever the user resizes or moves it.
+	// Only normal-state geometry is kept: minimising moves the window to
+	// (-32000,-32000) at 160x28 and fires both events, and maximised or
+	// fullscreen bounds are not what the window should restore to.
 	saver := &windowStateSaver{}
 	persist := func(*application.WindowEvent) {
+		if win.IsMinimised() || win.IsMaximised() || win.IsFullscreen() {
+			return
+		}
 		w, h := win.Size()
 		x, y := win.Position()
 		saver.record(windowState{Width: w, Height: h, X: x, Y: y, HasPos: true})
